@@ -34,7 +34,7 @@ def log_memory(tag=""):
 # --- Parse Configuration String ---
 # Expected format: <validation><landuse><version> e.g. "Kt0726", "wf2031"
 
-config_input = "WT0916"
+config_input = "WT1014"
 
 # --- Run sweep for the entire nation ---
 n_trials_for_study = 40 # Number of trials for the study
@@ -93,8 +93,9 @@ INTERIM_DIR = PROJECT_ROOT / "data" / "interim"
 PROCESSED_DIR = PROJECT_ROOT / "data" / "processed"
 EXTERNAL_DIR = PROJECT_ROOT / "data" / "external"
 REPORTS_DIR = PROJECT_ROOT / "reports"
+MODELS_DIR = PROJECT_ROOT / "models" / "xgboost"
 FIGURES_DIR = REPORTS_DIR / "figures"
-MODELS_DIR = PROJECT_ROOT / "models"
+SQLITE_DIR = PROJECT_ROOT / "sqlite"
 TABLES_DIR = REPORTS_DIR / "tables"
 
 # Load the data once outside the train function for efficiency
@@ -125,8 +126,10 @@ env_vars = [
 
 land_use_vars = [
     'Class_70', 'Class_60', 'Class_50', 'Class_40', 'Class_95',
-    'Class_30', 'Class_20', 'Class_10', 'Class_90', 'Class_80', 'Incidence_Rate_lag1'
+    'Class_30', 'Class_20', 'Class_10', 'Class_90', 'Class_80'
 ]
+
+epidemic_vars = ['Incidence_Rate_lag1']
 
 climate_vars = ['ANOM1+2', 'ANOM3', 'ANOM4', 'ANOM3.4', 'DMI', 'DMI_East']
 
@@ -141,7 +144,7 @@ for var_group in [env_vars, climate_vars]:
 
 # Compile feature list
 variable_columns = []
-for var in env_vars + climate_vars:
+for var in env_vars + climate_vars + epidemic_vars:
     if var in df.columns:
         variable_columns.append(var)
 if USE_LANDUSE_FEATURES:
@@ -205,214 +208,215 @@ def calculate_sample_weights(y):
 
 import cudf
 import gc
-import cudf
-import cudf
 
-def get_splits_gpu(df, validation_flag, train_window=None, test_window=None):
-    """
-    Generates train/test splits on the GPU, correctly handling multiple rows per time step,
-    using only cuDF operations.
+# def get_splits_gpu(df, validation_flag, train_window=None, test_window=None):
+#     """
+#     Generates train/test splits on the GPU, correctly handling multiple rows per time step,
+#     using only cuDF operations.
 
-    Returns a list of tuples: (fold_number, train_idx, test_idx)
-    where train_idx and test_idx are cudf.RangeIndex objects.
-    """
-    if validation_flag != 'w':
-        raise ValueError(f"Unsupported validation flag: {validation_flag}")
+#     Returns a list of tuples: (fold_number, train_idx, test_idx)
+#     where train_idx and test_idx are cudf.RangeIndex objects.
+#     """
+#     if validation_flag != 'w':
+#         raise ValueError(f"Unsupported validation flag: {validation_flag}")
 
-    if test_window is None:
-        raise ValueError("test_window must be provided for walk-forward validation")
+#     if test_window is None:
+#         raise ValueError("test_window must be provided for walk-forward validation")
 
-    # Sort and get unique time steps, reset index to a standard RangeIndex
-    df_sorted = df.sort_values('YearMonth').reset_index(drop=True)
-    unique_time_steps = df_sorted['YearMonth'].unique()
-    n_time_steps = len(unique_time_steps)
+#     # Sort and get unique time steps, reset index to a standard RangeIndex
+#     df_sorted = df.sort_values('YearMonth').reset_index(drop=True)
+#     unique_time_steps = df_sorted['YearMonth'].unique()
+#     n_time_steps = len(unique_time_steps)
     
-    splits = []
+#     splits = []
     
-    initial_train_window = 36 if train_window is None else train_window
+#     initial_train_window = 36 if train_window is None else train_window
     
-    # Calculate the number of folds
-    num_folds = (n_time_steps - initial_train_window) // test_window
+#     # Calculate the number of folds
+#     num_folds = (n_time_steps - initial_train_window) // test_window
     
-    for fold_num in range(num_folds):
-        # Calculate the start and end indices for the current fold based on unique time steps
-        test_start_idx_time = initial_train_window + fold_num * test_window
-        test_end_idx_time = test_start_idx_time + test_window
+#     for fold_num in range(num_folds):
+#         # Calculate the start and end indices for the current fold based on unique time steps
+#         test_start_idx_time = initial_train_window + fold_num * test_window
+#         test_end_idx_time = test_start_idx_time + test_window
         
-        test_start_time = unique_time_steps[test_start_idx_time]
-        test_end_time = unique_time_steps[test_end_idx_time]
+#         test_start_time = unique_time_steps[test_start_idx_time]
+#         test_end_time = unique_time_steps[test_end_idx_time]
         
-        # Expanding window logic
-        if train_window is None:
-            train_start_time = unique_time_steps[0]
-        # Rolling window logic
-        else:
-            train_start_idx_time = test_start_idx_time - train_window
-            if train_start_idx_time < 0:
-                print("Warning: Skipping fold, not enough data for train window.")
-                continue
-            train_start_time = unique_time_steps[train_start_idx_time]
+#         # Expanding window logic
+#         if train_window is None:
+#             train_start_time = unique_time_steps[0]
+#         # Rolling window logic
+#         else:
+#             train_start_idx_time = test_start_idx_time - train_window
+#             if train_start_idx_time < 0:
+#                 print("Warning: Skipping fold, not enough data for train window.")
+#                 continue
+#             train_start_time = unique_time_steps[train_start_idx_time]
 
-        # Use cuDF's `searchsorted` to find the indices of the full dataframe
-        # that correspond to the start and end of the time windows.
-        train_start_row_idx = df_sorted['YearMonth'].searchsorted(train_start_time, side='left')
-        train_end_row_idx = df_sorted['YearMonth'].searchsorted(test_start_time, side='left')
+#         # Use cuDF's `searchsorted` to find the indices of the full dataframe
+#         # that correspond to the start and end of the time windows.
+#         train_start_row_idx = df_sorted['YearMonth'].searchsorted(train_start_time, side='left')
+#         train_end_row_idx = df_sorted['YearMonth'].searchsorted(test_start_time, side='left')
         
-        test_start_row_idx = df_sorted['YearMonth'].searchsorted(test_start_time, side='left')
-        test_end_row_idx = df_sorted['YearMonth'].searchsorted(test_end_time, side='left')
+#         test_start_row_idx = df_sorted['YearMonth'].searchsorted(test_start_time, side='left')
+#         test_end_row_idx = df_sorted['YearMonth'].searchsorted(test_end_time, side='left')
 
-        # Create cuDF RangeIndex objects from these row indices
-        train_idx = cudf.RangeIndex(train_start_row_idx, train_end_row_idx)
-        test_idx = cudf.RangeIndex(test_start_row_idx, test_end_row_idx)
+#         # Create cuDF RangeIndex objects from these row indices
+#         train_idx = cudf.RangeIndex(train_start_row_idx, train_end_row_idx)
+#         test_idx = cudf.RangeIndex(test_start_row_idx, test_end_row_idx)
         
-        # Ensure splits are not empty
-        if not train_idx.empty and not test_idx.empty:
-            splits.append((fold_num, train_idx, test_idx))
+#         # Ensure splits are not empty
+#         if not train_idx.empty and not test_idx.empty:
+#             splits.append((fold_num, train_idx, test_idx))
 
-    return splits
+#     return splits
 
-def objective(trial, X_gpu, y_gpu, splits, num_classes=2):
-    y_gpu = y_gpu.squeeze()
+# def objective(trial, X_gpu, y_gpu, splits, num_classes=2):
+#     y_gpu = y_gpu.squeeze()
 
-    params = {
-        'objective': 'binary:logistic' if num_classes == 2 else 'multi:softprob',
-        'num_class': num_classes if num_classes > 2 else None,
-        'tree_method': 'hist',
-        'device': 'cuda',
-        'random_state': 64,
-        'n_jobs': -1,
-        'learning_rate': trial.suggest_float('learning_rate', 1e-6, 0.1, log=True),
-        'max_depth': trial.suggest_int('max_depth', 2, 10),
-        'subsample': trial.suggest_float('subsample', 0.5, 1.0),
-        'colsample_bytree': trial.suggest_float('colsample_bytree', 0.5, 1.0),
-        'min_child_weight': trial.suggest_int('min_child_weight', 10, 50),
-        'gamma': trial.suggest_float('gamma', 0.1, 10, log=True),
-        'reg_alpha': trial.suggest_float('reg_alpha', 0.1, 10, log=True),
-        'reg_lambda': trial.suggest_float('reg_lambda', 1, 100, log=True),
-        'eval_metric': 'logloss' if num_classes == 2 else 'mlogloss'
-    }
+#     params = {
+#         'objective': 'binary:logistic' if num_classes == 2 else 'multi:softprob',
+#         'num_class': num_classes if num_classes > 2 else None,
+#         'tree_method': 'hist',
+#         'device': 'cuda',
+#         'random_state': 64,
+#         'n_jobs': -1,
+#         'learning_rate': trial.suggest_float('learning_rate', 1e-6, 0.1, log=True),
+#         'max_depth': trial.suggest_int('max_depth', 2, 10),
+#         'subsample': trial.suggest_float('subsample', 0.5, 1.0),
+#         'colsample_bytree': trial.suggest_float('colsample_bytree', 0.5, 1.0),
+#         'min_child_weight': trial.suggest_int('min_child_weight', 10, 50),
+#         'gamma': trial.suggest_float('gamma', 0.1, 10, log=True),
+#         'reg_alpha': trial.suggest_float('reg_alpha', 0.1, 10, log=True),
+#         'reg_lambda': trial.suggest_float('reg_lambda', 1, 100, log=True),
+#         'eval_metric': 'logloss' if num_classes == 2 else 'mlogloss'
+#     }
     
-    num_boost_round = trial.suggest_int('n_estimators', 50, 1000)
+#     num_boost_round = trial.suggest_int('n_estimators', 50, 1000)
 
-    all_preds, all_true = [], []
+#     all_preds, all_true = [], []
 
-    for fold_num, train_idx, test_idx in splits:
-        X_train, y_train = X_gpu.iloc[train_idx], y_gpu.iloc[train_idx]
-        X_val, y_val = X_gpu.iloc[test_idx], y_gpu.iloc[test_idx]
+#     for fold_num, train_idx, test_idx in splits:
+#         X_train, y_train = X_gpu.iloc[train_idx], y_gpu.iloc[train_idx]
+#         X_val, y_val = X_gpu.iloc[test_idx], y_gpu.iloc[test_idx]
 
-        if X_train.empty or X_val.empty:
-            continue
+#         if X_train.empty or X_val.empty:
+#             continue
 
-        log_memory(f"Before fold {fold_num}")
+#         log_memory(f"Before fold {fold_num}")
 
-        sample_weights = calculate_sample_weights(y_train.to_numpy())
-        dtrain = xgboost.DMatrix(X_train, label=y_train.to_numpy(), weight=sample_weights)
-        dval = xgboost.DMatrix(X_val, label=y_val.to_numpy())
+#         sample_weights = calculate_sample_weights(y_train.to_numpy())
+#         dtrain = xgboost.DMatrix(X_train, label=y_train.to_numpy(), weight=sample_weights)
+#         dval = xgboost.DMatrix(X_val, label=y_val.to_numpy())
 
-        booster = xgboost.train(
-            params=params,
-            dtrain=dtrain,
-            num_boost_round=num_boost_round,
-            evals=[(dval, 'val')],
-            verbose_eval=False
-        )
+#         booster = xgboost.train(
+#             params=params,
+#             dtrain=dtrain,
+#             num_boost_round=num_boost_round,
+#             evals=[(dval, 'val')],
+#             verbose_eval=False
+#         )
 
-        preds_proba = booster.predict(dval)
-        preds = (preds_proba > 0.5).astype(int) if num_classes == 2 else np.argmax(preds_proba, axis=1)
+#         preds_proba = booster.predict(dval)
+#         preds = (preds_proba > 0.5).astype(int) if num_classes == 2 else np.argmax(preds_proba, axis=1)
 
-        all_preds.append(preds)
-        all_true.append(y_val.to_numpy().flatten())
+#         all_preds.append(preds)
+#         all_true.append(y_val.to_numpy().flatten())
 
-        # cleanup
-        del booster, dtrain, dval
-        gc.collect()
+#         # cleanup
+#         del booster, dtrain, dval
+#         gc.collect()
 
-        log_memory(f"After fold {fold_num}")
+#         log_memory(f"After fold {fold_num}")
 
-    if all_true:
-        acc = accuracy_score(np.concatenate(all_true), np.concatenate(all_preds))
-        log_memory("End of trial")
-        return acc
-    else:
-        return 0.0
+#     if all_true:
+#         acc = accuracy_score(np.concatenate(all_true), np.concatenate(all_preds))
+#         log_memory("End of trial")
+#         return acc
+#     else:
+#         return 0.0
     
 
 
-all_best_hypers = []
+# all_best_hypers = []
 
-# --- Starting modeling for the entire nation ---
-print("\n--- Starting modeling for the entire nation ---")
+# # --- Starting modeling for the entire nation ---
+# print("\n--- Starting modeling for the entire nation ---")
 
-# Use the full national training/validation dataset
-X_cudf = cudf_train_val_national[variable_columns]
-y_cudf = cudf_train_val_national[target].astype('int32')
+# # Use the full national training/validation dataset
+# X_cudf = cudf_train_val_national[variable_columns]
+# y_cudf = cudf_train_val_national[target].astype('int32')
 
-# Generate the splits.
-splits = get_splits_gpu(
-    df=cudf_train_val_national,
-    validation_flag=validation_flag,
-    test_window=12
-)
-print(f"Number of splits: {len(splits)}")
-for fold_num, train_idx, test_idx in splits:
-    print(f"Fold {fold_num}: Train {len(train_idx)}, Test {len(test_idx)}")
+# # Generate the splits.
+# splits = get_splits_gpu(
+#     df=cudf_train_val_national,
+#     validation_flag=validation_flag,
+#     test_window=12
+# )
+# print(f"Number of splits: {len(splits)}")
+# for fold_num, train_idx, test_idx in splits:
+#     print(f"Fold {fold_num}: Train {len(train_idx)}, Test {len(test_idx)}")
 
-# Inside the region loop
-national_study_name = all_study_name
-print(f"Name of study: {national_study_name}")
+# # Inside the region loop
+# national_study_name = all_study_name
+# print(f"Name of study: {national_study_name}")
 
-# Update file paths
-study = optuna.create_study(
-    study_name=national_study_name,
-    direction='maximize',
-    storage=f'sqlite:///{national_study_name}.db',
-    load_if_exists=True)
+# # Construct the full path to the .db file in the MODELS_DIR
+# db_path = SQLITE_DIR / f"{region_study_name}.db"
 
-print(f"Optuna study created/loaded: {national_study_name}.db")
-print(f"Starting {n_trials_for_study} trials...")
+# study = optuna.create_study(
+#     study_name=region_study_name,
+#     direction='maximize',
+#     # Use the absolute path for the storage URL
+#     storage=f'sqlite:///{db_path.resolve()}', 
+#     load_if_exists=True)
 
-# Run the optimization
-study.optimize(
-    lambda trial: objective(
-        trial,
-        X_gpu=X_cudf,
-        y_gpu=y_cudf,
-        splits=splits,
-        num_classes=num_classes
-    ),
-    n_trials=n_trials_for_study,
-    n_jobs=-1
-)
+# print(f"Optuna study created/loaded: {db_path.resolve()}")
+# print(f"Starting {n_trials_for_study} trials...")
 
-print(f"\nNational study completed.")
+# # Run the optimization
+# study.optimize(
+#     lambda trial: objective(
+#         trial,
+#         X_gpu=X_cudf,
+#         y_gpu=y_cudf,
+#         splits=splits,
+#         num_classes=num_classes
+#     ),
+#     n_trials=n_trials_for_study,
+#     n_jobs=-1
+# )
 
-# --- Retrieve and Log Best Hyperparameters for the Nation ---
-print(f"\n--- Best Hyperparameters for the nation Found by Optuna ---")
-best_params = study.best_params
-best_value = study.best_value
-print(f"Best Accuracy: {best_value:.4f}")
-print("Best hyperparameters:")
-for key, value in best_params.items():
-    print(f"  {key}: {value}")
+# print(f"\nNational study completed.")
 
-# Prepare data for CSV saving
-current_region_params = {
-'Region': "Nationwide", # Change this to a single label for the entire country
-'best_accuracy': best_value,
-**best_params
-}
-all_best_hypers.append(current_region_params)
+# # --- Retrieve and Log Best Hyperparameters for the Nation ---
+# print(f"\n--- Best Hyperparameters for the nation Found by Optuna ---")
+# best_params = study.best_params
+# best_value = study.best_value
+# print(f"Best Accuracy: {best_value:.4f}")
+# print("Best hyperparameters:")
+# for key, value in best_params.items():
+#     print(f"  {key}: {value}")
 
-if all_best_hypers:
-    best_hypers_df = pd.DataFrame(all_best_hypers)
-    # Use a consistent file name for the combined CSV
-    final_hypers_csv_path = TABLES_DIR / f"{all_study_name}_params.csv"
-    best_hypers_df.to_csv(final_hypers_csv_path, index=False)
-    print(f"\nSaved all national hyperparameters to {final_hypers_csv_path}")
-else:
-    print("\nNo national hyperparameters found to save.")
+# # Prepare data for CSV saving
+# current_region_params = {
+# 'Region': "Nationwide", # Change this to a single label for the entire country
+# 'best_accuracy': best_value,
+# **best_params
+# }
+# all_best_hypers.append(current_region_params)
 
-print("\n--- National Study and Hyperparameter Retrieval Completed ---")
+# if all_best_hypers:
+#     best_hypers_df = pd.DataFrame(all_best_hypers)
+#     # Use a consistent file name for the combined CSV
+#     final_hypers_csv_path = TABLES_DIR / f"{all_study_name}_params.csv"
+#     best_hypers_df.to_csv(final_hypers_csv_path, index=False)
+#     print(f"\nSaved all national hyperparameters to {final_hypers_csv_path}")
+# else:
+#     print("\nNo national hyperparameters found to save.")
+
+# print("\n--- National Study and Hyperparameter Retrieval Completed ---")
 
 # --- Begin Final Model Training and Evaluation ---
 print("\n--- Begin Final Model Training and Evaluation ---")
@@ -425,9 +429,7 @@ import xgboost
 import shap
 import matplotlib
 import matplotlib.pyplot as plt
-from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
-from matplotlib.backends.backend_pdf import PdfPages
-from sklearn.metrics import mean_squared_log_error
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score, mean_squared_log_error
 import warnings
 
 
@@ -465,162 +467,229 @@ def get_shap_array(shap_obj):
         else:
             return shap_obj
 
-
 # --- Get unique regions and read hyperparameters ---
 hyperparams_csv_path = TABLES_DIR / f"{all_study_name}_params.csv"
 hyperparams_df = pd.read_csv(hyperparams_csv_path)
 print(f"Extracted hyperparameters for all regions from: {hyperparams_csv_path}")
+excluded_feature = epidemic_vars
+batch_size_shap = 5000  # batch size for SHAP on GPU
 
-# --- Initialize data structures to store results ---
 all_results = []
-all_shap_plots_path = FIGURES_DIR / f"{all_study_name}_shap_plots.pdf"
-# --- Loop through each region ---
-with PdfPages(all_shap_plots_path) as pdf_pages:
-    # This part of the code is now simplified to only run once for the whole country
-    print(f"\n{'='*50}\nTraining and evaluating national model\n{'='*50}")
-    
-    # Use the full national training/validation and test datasets
-    X_train_val = cudf_train_val_national[variable_columns]
-    y_train_val = cudf_train_val_national[[target]].to_pandas().values.flatten()
-    X_test = cudf_test_national[variable_columns]
-    y_test = cudf_test_national[[target]].to_pandas().values.flatten()
-    
-    # Filter the hyperparameters for the "Nationwide" entry
-    nationwide_params_row = hyperparams_df[hyperparams_df['Region'] == 'Nationwide'].iloc[0]
-    national_hyperparams = {
-        'gamma': nationwide_params_row['gamma'],
-        'n_estimators': int(nationwide_params_row['n_estimators']),
-        'max_depth': int(nationwide_params_row['max_depth']),
-        'reg_alpha': nationwide_params_row['reg_alpha'],
-        'subsample': nationwide_params_row['subsample'],
-        'reg_lambda': nationwide_params_row['reg_lambda'],
-        'learning_rate': nationwide_params_row['learning_rate'],
-        'colsample_bytree': nationwide_params_row['colsample_bytree'],
-        'min_child_weight': int(nationwide_params_row['min_child_weight']),
+
+# --------------------------------------------------
+# --- Single Region: 'Nationwide'
+# --------------------------------------------------
+region = "Nationwide"
+region_study_name = f"xgbC-{region}-{validation_strategy}-{landuse_suffix}-{VERSION_STAMP}"
+print(f"\n{'='*50}\nProcessing Region: {region}\n{'='*50}")
+
+cudf_train_val_region = cudf_train_val_national.copy()
+cudf_test_region = cudf_test_national.copy()
+
+if cudf_train_val_region.empty or cudf_test_region.empty:
+    raise ValueError(f"No data available for '{region}' — cannot proceed.")
+
+# Convert to Pandas for easier SHAP slicing
+X_train_val = cudf_train_val_region[variable_columns].to_pandas()
+y_train_val = cudf_train_val_region[target].to_pandas().values.flatten()
+X_test = cudf_test_region[variable_columns].to_pandas()
+y_test = cudf_test_region[target].to_pandas().values.flatten()
+
+model_path = MODELS_DIR / f"{region_study_name}.json"
+region_dir = os.path.join(FIGURES_DIR, region)
+beeswarm_dir = os.path.join(region_dir, "beeswarm_plots")
+dependence_dir = os.path.join(region_dir, "dependence_plots")
+os.makedirs(beeswarm_dir, exist_ok=True)
+os.makedirs(dependence_dir, exist_ok=True)
+
+# ----------------------------
+# --- Load or Train Model ---
+# ----------------------------
+if model_path.exists():
+    print(f"Found pretrained model for '{region}'. Loading...")
+    model = xgboost.Booster()
+    model.load_model(str(model_path))
+else:
+    print(f"No pretrained model found for '{region}'. Training new model...")
+    region_params_row = hyperparams_df[hyperparams_df['Region'] == region].iloc[0]
+    region_hyperparams = {
+        'gamma': region_params_row['gamma'],
+        'max_depth': int(region_params_row['max_depth']),
+        'reg_alpha': region_params_row['reg_alpha'],
+        'subsample': region_params_row['subsample'],
+        'reg_lambda': region_params_row['reg_lambda'],
+        'learning_rate': region_params_row['learning_rate'],
+        'colsample_bytree': region_params_row['colsample_bytree'],
+        'min_child_weight': int(region_params_row['min_child_weight']),
         'device': 'cuda'
     }
-    
     if num_classes > 2:
-        national_hyperparams['objective'] = 'multi:softprob'
-        national_hyperparams['num_class'] = num_classes
+        region_hyperparams['objective'] = 'multi:softprob'
+        region_hyperparams['num_class'] = num_classes
     else:
-        national_hyperparams['objective'] = 'binary:logistic'
+        region_hyperparams['objective'] = 'binary:logistic'
 
-    num_round = int(nationwide_params_row['n_estimators'])
+    num_round = int(region_params_row['n_estimators'])
+    Dtrain = xgboost.DMatrix(X_train_val, label=y_train_val)
+    model = xgboost.train(region_hyperparams, Dtrain, num_boost_round=num_round)
+    model.save_model(str(model_path))
+    del Dtrain
+    gc.collect()
+    cp.get_default_memory_pool().free_all_blocks()
+    print(f"Saved new model for {region}.")
 
-    # Display copies for SHAP plotting
-    X_test_display = X_test.copy()
-    X_train_pd = X_train_val.to_pandas()
-    X_test_pd = X_test.to_pandas()
-    
-    sample_weights = calculate_sample_weights(y_train_val)
-    Dtrain = xgboost.DMatrix(X_train_val, label=y_train_val, weight=sample_weights)
-    Dtest = xgboost.DMatrix(X_test, label=y_test)
+# =========================================================================
+# --- Evaluate Train/Val and Test Sets ---
+# =========================================================================
+datasets = {
+    "Train_Val": (X_train_val, y_train_val),
+    "Test": (X_test, y_test)
+}
 
-    # --- Train model ---
-    model = xgboost.train(national_hyperparams, Dtrain, num_boost_round=num_round)
-    model.set_param({"device": "cuda"})
+for set_name, (X_set, y_set) in datasets.items():
+    print(f"\n--- Evaluating {set_name} Set ---")
 
-    # --- Tree plot visualization and saving ---
-    # Create a new figure specifically for the tree plot
-    fig, ax = plt.subplots(figsize=(200, 100))  # Large size for clarity
-    xgboost.plot_tree(model, num_trees=0, ax=ax)
-    plt.title(f"{all_study_name}_Tree")
-    plt.savefig(FIGURES_DIR / f"{all_study_name}_Tree.svg", bbox_inches="tight") # Save the plot as a PNG
-    plt.close() # Close the figure to free up memory
-
-
-    # --- Predict and compute performance metrics ---
-    y_pred_prob = model.predict(Dtest)
+    Dset = xgboost.DMatrix(X_set)
+    y_pred_prob = model.predict(Dset)
 
     if num_classes > 2:
         y_pred = y_pred_prob.argmax(axis=1)
     else:
         y_pred = (y_pred_prob > 0.5).astype(int)
 
-    accuracy = accuracy_score(y_test, y_pred)
-    report = classification_report(y_test, y_pred, output_dict=True)
-    target_counts = pd.Series(y_test).value_counts().to_dict()
-
-    # Update confusion matrix labels based on num_classes
+    # Metrics
+    accuracy = accuracy_score(y_set, y_pred)
+    report = classification_report(y_set, y_pred, output_dict=True)
+    target_counts = pd.Series(y_set).value_counts().to_dict()
     class_labels = list(range(num_classes))
-    cm = confusion_matrix(y_test, y_pred, labels=class_labels)
-    plt.figure(figsize=(num_classes * 2, num_classes * 2))
+    cm = confusion_matrix(y_set, y_pred, labels=class_labels)
+
+    # Create the plot
+    plt.figure(figsize=(num_classes*2, num_classes*2))
     sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", xticklabels=class_labels, yticklabels=class_labels)
-    plt.xlabel("Predicted Label")
-    plt.ylabel("True Label")
-    plt.title(f"Confusion Matrix - Nationwide")
-    pdf_pages.savefig(bbox_inches="tight")
-    plt.close()
+    plt.xlabel("Predicted")
+    plt.ylabel("True")
+    plt.title(f"Confusion Matrix - {region} ({set_name})")
 
-    # Update the summary data dictionary to log metrics for all classes
-    national_summary_data = {"Region": "Nationwide", "Accuracy": accuracy}
+    # Save the plot
+    save_path = os.path.join(region_dir, f"confusion_matrix_{set_name}.png")
+    plt.savefig(save_path, bbox_inches='tight')  # bbox_inches='tight' avoids cutting off labels
+    plt.close()  # Close the figure to free memory
+
+    region_summary = {"Region": region, "Dataset": set_name, "Accuracy": accuracy}
     for i in range(num_classes):
-        national_summary_data[f"Class_{i}_count"] = target_counts.get(i, 0)
+        region_summary[f"Class_{i}_count"] = target_counts.get(i, 0)
         if str(i) in report:
-            national_summary_data[f"Precision_{i}"] = report[str(i)]['precision']
-            national_summary_data[f"Recall_{i}"] = report[str(i)]['recall']
-            national_summary_data[f"F1_{i}"] = report[str(i)]['f1-score']
+            region_summary[f"Precision_{i}"] = report[str(i)]['precision']
+            region_summary[f"Recall_{i}"] = report[str(i)]['recall']
+            region_summary[f"F1_{i}"] = report[str(i)]['f1-score']
+    region_summary["Macro_Precision"] = report['macro avg']['precision']
+    region_summary["Macro_Recall"] = report['macro avg']['recall']
+    region_summary["Macro_F1"] = report['macro avg']['f1-score']
+    region_summary["Weighted_Precision"] = report['weighted avg']['precision']
+    region_summary["Weighted_Recall"] = report['weighted avg']['recall']
+    region_summary["Weighted_F1"] = report['weighted avg']['f1-score']
+    all_results.append(region_summary)
+    print(f"{set_name} Accuracy: {accuracy:.4f} | Target counts: {target_counts}")
 
-    # Add macro and weighted averages
-    national_summary_data["Macro_Precision"] = report['macro avg']['precision']
-    national_summary_data["Macro_Recall"] = report['macro avg']['recall']
-    national_summary_data["Macro_F1"] = report['macro avg']['f1-score']
-    national_summary_data["Weighted_Precision"] = report['weighted avg']['precision']
-    national_summary_data["Weighted_Recall"] = report['weighted avg']['recall']
-    national_summary_data["Weighted_F1"] = report['weighted avg']['f1-score']
-
-    all_results.append(national_summary_data)
-    
-    print(f"Results for Nationwide: Accuracy={accuracy:.4f}")
-    print(f"Target distribution for Nationwide: {target_counts}")
-    
+    # =========================================================================
+    # --- SHAP Analysis (full dataset) ---
+    # =========================================================================
     try:
-        # SHAP GPU Tree Explainer
+        shap_features = list(X_set.columns)
+        X_shap = X_set
+
         explainer = shap.explainers.GPUTree(model, feature_perturbation="tree_path_dependent")
         
-        # --- Compute SHAP values ---
-        shap_values_raw = explainer.shap_values(X_test_pd, check_additivity=False)
-        
-        # --- Determine top 5 features (based on mean absolute SHAP over all classes) ---
-        overall_shap_values_for_importance = get_shap_array(shap_values_raw)
-        feature_importances = np.mean(np.abs(overall_shap_values_for_importance), axis=0)
-        top_5_features_idx = np.argsort(feature_importances)[::-1][:5]
-        top_5_features = [X_test_pd.columns[i] for i in top_5_features_idx]
+        # Full SHAP computation (no slicing)
+        shap_values = explainer.shap_values(X_shap, check_additivity=False)
 
-        print(f"\nTop 5 predictors for Nationwide: {top_5_features}")
-
-        # --- Beeswarm plots (one for each class) ---
+        # Compute top 5 features per class (excluding specific features)
+        top_5_features_by_class = []
         for class_idx in range(num_classes):
-            sv = shap_values_raw[class_idx]
-            plt.figure(figsize=(12, 8))
-            shap.summary_plot(sv, X_test_pd, show=False)
-            plt.title(f"SHAP Beeswarm Plot for Class {class_idx} - Nationwide")
-            pdf_pages.savefig(bbox_inches="tight")
-            plt.close()
+            if num_classes > 2:
+                mean_abs_shap = np.abs(shap_values[class_idx]).mean(axis=0)
+            else:
+                mean_abs_shap = np.abs(shap_values).mean(axis=0)
 
-        # --- Dependence plots (one for each top feature, across all classes) ---
-        for feature in top_5_features:
-            for class_idx in range(num_classes):
+            # Rank all features by absolute SHAP magnitude
+            sorted_idx = mean_abs_shap.argsort()[::-1]
+            sorted_features = [shap_features[i] for i in sorted_idx]
+
+            # Exclude unwanted features, then take top 5 remaining
+            top_features = [f for f in sorted_features if f not in excluded_feature][:5]
+            top_5_features_by_class.append(top_features)
+            print(f"Top 5 plotted features for Class {class_idx} ({set_name}): {top_features}")
+
+    except Exception as e:
+        print(f"SHAP failed for {region} ({set_name}): {e}")
+
+
+    # =========================================================================
+    # --- SHAP plotting (full dataset) ---
+    # =========================================================================
+    try:
+        shap_features = list(X_set.columns)
+        X_shap_plot = X_set  # full feature set for plotting
+
+        # --- Beeswarm plots ---
+        for class_idx in range(num_classes):
+            plt.figure(figsize=(12, 8))
+            if num_classes > 2:
+                shap_vals = shap_values[class_idx]
+            else:
+                shap_vals = shap_values
+
+            # Exclude specific features only for visualization
+            included_cols = [c for c in X_shap_plot.columns if c not in excluded_feature]
+            shap_vals_plot = shap_vals[:, [i for i, c in enumerate(X_shap_plot.columns) if c in included_cols]]
+            X_slice_plot = X_shap_plot[included_cols]
+
+            shap.summary_plot(
+                shap_vals_plot,
+                X_slice_plot,
+                show=False
+            )
+            plt.title(f"SHAP Beeswarm - Class {class_idx} ({set_name}, excl. {excluded_feature})")
+            plt.savefig(
+                os.path.join(beeswarm_dir, f"class_{class_idx}_beeswarm({set_name}).png"),
+                bbox_inches="tight", dpi=300
+            )
+            plt.close()
+            print(f"[OK] Saved SHAP beeswarm for Class {class_idx} ({set_name})")
+
+        # --- Dependence plots (top 5 features per class) ---
+        for class_idx in range(num_classes):
+            top_features = [f for f in top_5_features_by_class[class_idx] if f not in excluded_feature][:5]
+            for feature in top_features:
                 plt.figure(figsize=(10, 6))
-                # Pass the SHAP values for a single class (shap_values_raw[class_idx])
+                if num_classes > 2:
+                    shap_vals = shap_values[class_idx]
+                else:
+                    shap_vals = shap_values
+
                 shap.dependence_plot(
-                    feature, 
-                    shap_values_raw[class_idx], 
-                    X_test_pd, 
-                    interaction_index=None, 
+                    feature,
+                    shap_vals,
+                    X_shap_plot,
+                    interaction_index='auto',
                     show=False
                 )
-                plt.title(f"SHAP Dependence Plot for {feature}, Class {class_idx} - Nationwide")
-                pdf_pages.savefig(bbox_inches="tight")
+                plt.title(f"SHAP Dependence - {feature}, Class {class_idx} ({set_name})")
+                plt.savefig(
+                    os.path.join(dependence_dir, f"class_{class_idx}_{feature}_dependence({set_name}).png"),
+                    bbox_inches="tight", dpi=300
+                )
                 plt.close()
+                print(f"[OK] Saved SHAP dependence for {feature}, Class {class_idx} ({set_name})")
     except Exception as e:
-        print(f"Failed to generate SHAP plots for the nationwide model: {e}")
+        print(f"SHAP plotting failed for {region} ({set_name}): {e}")
 
 # --- Save summary table for all regions ---
 summary_df = pd.DataFrame(all_results)
 csv_filename = TABLES_DIR / f"{all_study_name}_national_results.csv"
 summary_df.to_csv(csv_filename, index=False, float_format="%.4f")
 print(f"\nNational summary table saved to '{csv_filename}'")
-print(f"All national SHAP plots saved to '{all_shap_plots_path}'")
 print("-" * 50)
+
+

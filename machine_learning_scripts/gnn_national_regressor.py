@@ -168,8 +168,7 @@ dataset = StaticGraphTemporalSignal(
     features=all_features,
     targets=all_targets
 )
-snapshot = dataset[0]
-
+snapshot = dataset[0]         # returns PyG Data object
 print("Type of snapshot:", type(snapshot))
 print("Length of snapshot:", len(snapshot))
 
@@ -179,18 +178,16 @@ for i, elem in enumerate(snapshot):
 print("Type of snapshot:", type(snapshot))
 print("Length of snapshot:", len(snapshot))
 
-x_seq, edge_index, edge_weight, y_seq = dataset[0]
 
-print("x_seq type:", type(x_seq))
-print("Number of time steps:", len(x_seq))
-print("y_seq type:", type(y_seq))
-print("Number of targets:", len(y_seq))
+x_seq = snapshot.x             # [N, F]
+y_seq = snapshot.y             # [N, 1]
+snapshot.edge_weight = dataset.edge_weight
 
 # Inspect first snapshot
 print("x[0] shape:", x_seq[0].shape)
 print("y[0] shape:", y_seq[0].shape)
-print("edge_index shape:", edge_index.shape)
-print("edge_weight shape:", edge_weight.shape if edge_weight is not None else None)
+print("edge_index shape:", snapshot.edge_index)
+print("edge_weight shape:", snapshot.edge_weight.shape)
 
 
 # --- 3. Split the Data into Training and Testing Sets ---
@@ -260,20 +257,30 @@ def train():
     num_snapshots = len(train_dataset.features)
 
     for t in range(num_snapshots):
-        x, y = train_dataset[t].x, train_dataset[t].y
-        x = torch.tensor(x, dtype=torch.float32).unsqueeze(0).to(device)
-        y = torch.tensor(y, dtype=torch.float32).to(device)
+        # Get snapshot
+        x_snapshot, y_snapshot = train_dataset[t].x, train_dataset[t].y
+        
+        # Convert to tensors
+        # Add a temporal dimension (batch of 1 snapshot)
+        x = x_snapshot.clone().detach().unsqueeze(0).float()
+        y = torch.tensor(y_snapshot, dtype=torch.float32).unsqueeze(0).to(device)  # [1, N, 1]
+
         edge_index_t = edge_index.to(device)
+        edge_weight_t = edge_weight.to(device)
 
         optimizer.zero_grad()
-        out = model(x, edge_index_t)
+        out = model(x, edge_index_t)  # [1, N, 1]
+
+        # Compute loss
         loss = criterion(out, y)
         loss.backward()
         optimizer.step()
 
-        total_loss += loss.item()
+        total_loss += loss.item() 
 
-    return total_loss / num_snapshots
+    avg_loss = total_loss / num_snapshots
+    return avg_loss
+
 
 
 # --- Testing / evaluation loop ---
