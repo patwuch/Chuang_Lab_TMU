@@ -1,21 +1,14 @@
-import os, glob, pandas as pd, xarray as xr, numpy as np
+from pathlib import Path
+import glob
+import pandas as pd
+import numpy as np
+
+######## RUN THIS TO CREATE DAG ########
+# snakemake --cores 4 --dag 2>/dev/null | grep -v "Including" | dot -Tpdf > dag.pdf
+########################################
+
 
 configfile: "config.yaml"
-
-BASE = workflow.basedir                          # e.g. /home/.../chuang_lab_tmu/main/ssp_rcp
-PROJECT = os.path.abspath(os.path.join(BASE, "..", ".."))  # -> /home/.../chuang_lab_tmu
-WORK = os.path.join(PROJECT, "work")             # -> /home/.../chuang_lab_tmu/work
-
-def w(path):
-    return os.path.join(WORK, "data", "raw", path)
-
-GWL_RAW   = w(config["raw_gwl_dir"])         # work/<raw_gwl_dir>
-AR6_RAW   = w(config["raw_ar6_dir"])         # work/<raw_ar6_dir>
-TREAD_RAW = w(config["raw_tread_dir"])       # work/<raw_tread_dir>
-NETCDF_DIR  =  "/home/patwuch/projects/chuang_lab_tmu/work/ssp_rcp/data/interim/NetCDF"        # work/<NetCDF_dir>
-GWL_NETCDF = os.path.join(NETCDF_DIR, "GWL_NetCDF")
-AR6_NETCDF = os.path.join(NETCDF_DIR, "AR6_NetCDF")
-TREAD_NETCDF = os.path.join(NETCDF_DIR, "TREAD_NetCDF")
 
 ar6_variables = config["ar6_variables"]
 tread_variables = config["tread_variables"]
@@ -23,15 +16,96 @@ gwls = config["gwls"]
 ssp_scenarios = config["ssp_scenarios"]
 branches = config["branches"]
 
-print("BASE   =", BASE)
-print("PROJECT=", PROJECT)
-print("WORK   =", WORK)
-print("GWL_DIR=", GWL_RAW)
-print("AR6_DIR=", AR6_RAW)
-print("TREAD_DIR=", TREAD_RAW)
 
-print("OUT_DIR=", NETCDF_DIR)
+PROJECT_MAIN_DIR = Path(workflow.basedir).resolve()  # Snakefile directory
+ROOT_DIR = PROJECT_MAIN_DIR.parents[1]              # go up 3 levels to chuang_lab_tmu
+WORK_DIR = ROOT_DIR / "work"
+PROJECT_WORK_DIR = WORK_DIR / "ssp_rcp"
 
-include: "rules/ar6.smk"
-include: "rules/gwl.smk"
-# include: "rules/tread.smk"
+DATA_DIR = PROJECT_WORK_DIR / "data"
+RAW_DIR = DATA_DIR / "raw"
+INTERIM_DIR = DATA_DIR / "interim"
+PROCESSED_DIR = DATA_DIR / "processed"
+
+GWL_RAW_DIR   = RAW_DIR / "GWL"
+AR6_RAW_DIR   = RAW_DIR / "AR6"
+TREAD_RAW_DIR = RAW_DIR / "TREAD"
+NETCDF_DIR    = INTERIM_DIR / "NetCDF"
+GWL_NETCDF_DIR = NETCDF_DIR / "GWL_NetCDF"
+AR6_NETCDF_DIR = NETCDF_DIR / "AR6_NetCDF"
+TREAD_NETCDF_DIR = NETCDF_DIR / "TREAD_NetCDF"
+
+FIGURES_DIR = PROJECT_WORK_DIR / "figures"
+
+# List of all directories you want to create
+dirs_to_create = [
+    WORK_DIR,
+    PROJECT_WORK_DIR,
+    DATA_DIR,
+    RAW_DIR,
+    INTERIM_DIR,
+    PROCESSED_DIR,
+    GWL_RAW_DIR,
+    AR6_RAW_DIR,
+    TREAD_RAW_DIR,
+    NETCDF_DIR,
+    GWL_NETCDF_DIR,
+    AR6_NETCDF_DIR,
+    TREAD_NETCDF_DIR,
+    FIGURES_DIR
+]
+
+dirs_to_create = [
+    WORK_DIR,
+    PROJECT_WORK_DIR,
+    DATA_DIR,
+    RAW_DIR,
+    INTERIM_DIR,
+    PROCESSED_DIR,
+    GWL_RAW_DIR,
+    AR6_RAW_DIR,
+    TREAD_RAW_DIR,
+    NETCDF_DIR,
+    GWL_NETCDF_DIR,
+    AR6_NETCDF_DIR,
+    TREAD_NETCDF_DIR,
+    FIGURES_DIR
+]
+
+rule make_dirs:
+    # Output can just be the top-level dir
+    output:
+        PROJECT_WORK_DIR = directory(PROJECT_WORK_DIR)
+    run:
+        for directory in dirs_to_create:
+            abs_path = Path(directory).resolve()
+            if not abs_path.exists():
+                print(f"Creating directory: {abs_path}")
+                abs_path.mkdir(parents=True, exist_ok=True)
+            else:
+                print(f"Directory already exists: {abs_path}")
+
+for branch in branches:
+    print(f"Including rules for branch: {branch}")
+    include: f"rules/{branch}.smk"
+
+all_inputs = [
+    NETCDF_DIR / "ar6_all.nc",
+    NETCDF_DIR / "gwl_all.nc",
+    # NETCDF_DIR / "tread_all.nc"
+]
+
+
+# Keep only files that actually exist or will be created
+all_inputs = [str(f) for f in all_inputs]
+
+
+
+rule all:
+    input:
+        all_inputs
+
+
+
+
+

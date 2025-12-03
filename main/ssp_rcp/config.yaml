@@ -1,11 +1,7 @@
-raw_gwl_dir: "GWL"
-raw_ar6_dir: "AR6"
-raw_tread_dir: "TREAD"
-NetCDF_dir: "NetCDF"
 branches:
   - gwl
-  - ssp
-  - tread
+  - ar6
+  # - tread
 ar6_variables:
   - prec
   - temp_min
