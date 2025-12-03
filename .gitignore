@@ -5,3 +5,4 @@ work/
 *.csv
 *.sav
 *.nc
+main/ssp_rcp/.snakemake/
