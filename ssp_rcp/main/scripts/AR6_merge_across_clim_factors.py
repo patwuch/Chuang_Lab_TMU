@@ -1,31 +1,26 @@
-import xarray as xr
 import pandas as pd
-from pathlib import Path
 import numpy as np
-import glob
-import os
+import xarray as xr
+from pathlib import Path
 
-# -------------------------
-# Step 3: Merge all variables → final NetCDF
-# -------------------------
-files = snakemake.input
-out_path = snakemake.output
+# Fill value to be masked
+FILL_VALUE = -99.9
 
-if not files:
-    raise ValueError("No variable NetCDF files found for merging!")
+# Load datasets
+ds_list = [xr.open_dataset(f) for f in snakemake.input]
 
-ds_list = []
+# Mask fill values in each dataset before merging
+for i, ds in enumerate(ds_list):
+    for var in ds.data_vars:
+        ds[var] = ds[var].where(ds[var] != FILL_VALUE)
+    ds_list[i] = ds  # update list with masked dataset
 
-for f in files:
-    ds = xr.open_dataset(f)
-    var_name = list(ds.data_vars)[0]
-    ds = ds.expand_dims({"variable": [var_name]})
-    ds_list.append(ds)
+# Merge datasets
+merged = xr.merge(ds_list)
 
-combined_all = xr.concat(ds_list, dim="variable", combine_attrs="override")
-combined_all = combined_all.fillna(float("nan"))
+# Make sure output directory exists
+Path(snakemake.output[0]).parent.mkdir(parents=True, exist_ok=True)
 
-
-os.makedirs(out_path.parent, exist_ok=True)
-combined_all.to_netcdf(out_path)
-print(f"Saved final merged NetCDF: {out_path}")
+# Save merged dataset
+merged.to_netcdf(snakemake.output[0])
+print("All processed!")

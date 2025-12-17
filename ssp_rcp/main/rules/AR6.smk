@@ -1,48 +1,86 @@
+###############################################################################
+# Rule: Merge CSVs → One NetCDF per (clim_factor, AR6)
+###############################################################################
+# Helper function to collect CSVs safely
+def collect_AR6_csvs(wc):
+    folder = Path(AR6_RAW_DIR) / wc.clim_factor / wc.ar6
+    if not folder.exists():
+        raise FileNotFoundError(f"Folder does not exist: {folder.resolve()}")
+    csv_files = sorted(folder.glob("*.csv"))
+    if not csv_files:
+        raise ValueError(f"No CSV files found in {folder.resolve()}")
+    return csv_files
+
 
 rule AR6_convert_and_merge_across_years:
     input:
-        ar6_csv_paths
+        lambda wc: collect_AR6_csvs(wc)
     output:
-        ar6_interim_netcdf_list
-    params:
-        grouping = ar6_groups
+        AR6_NETCDF_DIR / "{clim_factor}" / "{ar6}.nc"
+    threads: 12
     conda:
-        "/home/patwuch/Documents/projects/Chuang_Lab_TMU/main/ssp_rcp/envs/environment.yaml"
-    log:
-        "/home/patwuch/Documents/projects/Chuang_Lab_TMU/main/ssp_rcp/AR6_convert_and_merge_across_years.log"
+        SSPRCP_MAIN_DIR / "envs/environment.yaml"
     script:
-        "/home/patwuch/Documents/projects/Chuang_Lab_TMU/main/ssp_rcp/scripts/AR6_convert_and_merge_across_years.py"
+        SCRIPTS_DIR / "AR6_convert_and_merge_across_years.py"
+
+###############################################################################
+# Rule: Combine all AR6 NetCDFs for each climate factor
+###############################################################################
 
 rule AR6_merge_across_models:
     input:
-        ar6_interim_netcdf_list
-    output:
-        # One merged file per variable
-        expand(AR6_NETCDF_DIR / "{factor}.nc", factor=ar6_clim_factors)
-    params:
-        all_vars = ar6_clim_factors,
-        all_ssps = ssp_scenarios,
-        AR6_NETCDF_DIR = AR6_NETCDF_DIR,
-        AR6_INTERIM_DIR = AR6_INTERIM_DIR
-    conda:
-        "/home/patwuch/Documents/projects/Chuang_Lab_TMU/main/ssp_rcp/envs/environment.yaml"
-    log:
-        "/home/patwuch/Documents/projects/Chuang_Lab_TMU/main/ssp_rcp/AR6_merge_across_models.log"
-    script:
-        "/home/patwuch/Documents/projects/Chuang_Lab_TMU/main/ssp_rcp/scripts/AR6_merge_across_models.py"
-
-# -------------------------------------------
-# Step 3: Merge across all climate factors
-# -------------------------------------------
-rule AR6_merge_across_clim_factors:
-    input:
-        expand(
-            AR6_NETCDF_DIR / "{factor}.nc",
-            factor=ar6_clim_factors
+        lambda wc: expand(
+            AR6_NETCDF_DIR / wc.clim_factor / "{AR6}.nc",
+            AR6=ssp_scenarios
         )
     output:
-        NETCDF_DIR / "ar6_all.nc"
+        AR6_NETCDF_DIR / "combined_{clim_factor}.nc"
+    threads: 6
     conda:
-        "/home/patwuch/Documents/projects/Chuang_Lab_TMU/main/ssp_rcp/envs/environment.yaml"
+        SSPRCP_MAIN_DIR / "envs/environment.yaml"
     script:
-        "/home/patwuch/Documents/projects/Chuang_Lab_TMU/main/ssp_rcp/scripts/AR6_merge_across_clim_factors_netcdf.py"
+        SCRIPTS_DIR / "AR6_merge_across_models.py"
+
+###############################################################################
+# Rule: Merge all climate factors into a single AR6_all.nc
+###############################################################################
+
+rule AR6_merge_across_clim_factors:
+    input:
+        expand(AR6_NETCDF_DIR / "combined_{clim_factor}.nc", clim_factor=ar6_clim_factors)
+    output:
+        AR6_NETCDF_DIR / "AR6_all.nc"
+    conda:
+        SSPRCP_MAIN_DIR / "envs/environment.yaml"
+    script:
+        SCRIPTS_DIR / "AR6_merge_across_clim_factors.py"
+
+
+###############################################################################
+# Rule: Slice AR6 all.nc depending on provided configuration
+###############################################################################
+
+rule AR6_get_slice_netcdf:
+    input:
+        AR6_NETCDF_DIR / "AR6_all.nc"
+    output:
+        AR6_NETCDF_DIR / "AR6_all_sliced.nc"
+    conda:
+        SSPRCP_MAIN_DIR / "envs/environment.yaml"
+    script:
+        SCRIPTS_DIR / "get_slice_netcdf.py"
+
+
+###############################################################################
+# Rule: Convert sliced NetCDF to TSV
+###############################################################################
+rule AR6_netcdf_slice_to_tsv:
+    input:
+        AR6_NETCDF_DIR / "AR6_all_sliced.nc"
+    output:
+        AR6_NETCDF_DIR / "AR6_all_sliced.tsv"
+    conda:
+        SSPRCP_MAIN_DIR / "envs/environment.yaml"
+    script:
+        SCRIPTS_DIR / "netcdf_slice_to_tsv.py"
+
