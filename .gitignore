@@ -9,3 +9,12 @@ ssp_rcp/work
 zonaL_statistics/work
 promedscrape/work
 gee_dengue_ml/work
+
+# Snakemake
+.snakemake/
+**/.snakemake/
+
+# Conda / environments
+conda/
+.env/
+venv/
