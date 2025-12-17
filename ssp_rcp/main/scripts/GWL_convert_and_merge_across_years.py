@@ -3,16 +3,12 @@ import numpy as np
 import xarray as xr
 from pathlib import Path
 
-print("Wildcards:", snakemake.wildcards)
 
-input_dir = Path(snakemake.input[0])
-print("Input directory:", input_dir)
-
-csv_files = sorted(input_dir.glob("*.csv"))
-print("CSV files found:", csv_files)
+csv_files = snakemake.input
 
 if not csv_files:
-    raise ValueError(f"No CSV files found in {input_dir}")
+    raise ValueError(f"No CSV files found for {snakemake.wildcards.clim_factor}/{snakemake.wildcards.gwl}")
+
 
 all_da = []
 
@@ -27,14 +23,21 @@ for f in csv_files:
         raise ValueError(f"Duplicate columns in {f}")
 
     time_cols = [c for c in df.columns if c not in ["LON", "LAT"] and c.isdigit()]
-    times = pd.to_datetime(time_cols, format="%Y%m%d")
+    valid_time_cols = []
+    for c in time_cols:
+        try:
+            pd.to_datetime(c, format="%Y%m%d")
+            valid_time_cols.append(c)
+        except ValueError:
+            print(f"Skipping invalid date column: {c}")
+    times = pd.to_datetime(valid_time_cols, format="%Y%m%d")
 
     lon = np.sort(df["LON"].unique())
     lat = np.sort(df["LAT"].unique())
 
     data = np.full((len(times), len(lat), len(lon)), np.nan)
 
-    for i, tcol in enumerate(time_cols):
+    for i, tcol in enumerate(valid_time_cols):
         grid = df.pivot_table(values=tcol, index="LAT", columns="LON")
         grid = grid.reindex(index=lat, columns=lon)
         data[i] = grid.values
